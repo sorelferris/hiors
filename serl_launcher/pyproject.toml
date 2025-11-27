@@ -61,7 +61,7 @@ dependencies = [
     "gpustat",
     #"keyboard",
     "deepspeed==0.16.4",
-    "lerobot@git+https://github.com/huggingface/lerobot.git@638d411cd3acf32c28d8c2120f3c41bda8bb15d4",
+    "lerobot@git+https://github.com/huggingface/lerobot.git@ed83cbd4f2091a3e97cdd0c48cc657020c037240",
     "agentlace@git+https://github.com/youliangtan/agentlace.git@cf2c337c5e3694cdbfc14831b239bd657bc4894d",
 ]
 
