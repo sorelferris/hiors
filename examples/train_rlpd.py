@@ -969,7 +969,7 @@ def main(cfg: DictConfig):
     # Setup environment
     cprint(f"Setting up environment: {cfg.exp_name}", "yellow")
     if cfg.exp_name == "dobot_pnp":
-        from experiments.dobot_pnp.config import get_environment
+        from experiments.dobot_pnp.config import get_environment  # noqa
 
         env = get_environment(
             fake_env=cfg.learner,

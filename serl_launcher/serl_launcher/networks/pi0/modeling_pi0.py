@@ -50,27 +50,31 @@ policy = Pi0Policy.from_pretrained("lerobot/pi0")
 ```
 
 """
+
 import os
 import sys
-BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-sys.path.insert(0, BASE_DIR)
-import math
-from collections import deque
 
-import torch
-import torch.nn.functional as F  # noqa: N812
-from torch import Tensor, nn
-from transformers import AutoTokenizer
+# ruff: noqa: E402
+BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))  # noqa
+sys.path.insert(0, BASE_DIR)
+ 
+from collections import deque
+import math
 
 # from lerobot.common.constants import ACTION, OBS_ROBOT
-from lerobot.common.policies.normalize import Normalize, Unnormalize
-from serl_launcher.networks.pi0.configuration_pi0 import PI0Config
-from serl_launcher.networks.pi0.paligemma_with_expert import (
-    PaliGemmaWithExpertConfig,
-    PaliGemmaWithExpertModel,
-)
+from lerobot.common.policies.normalize import Normalize
+from lerobot.common.policies.normalize import Unnormalize
 from lerobot.common.policies.pretrained import PreTrainedPolicy
 from lerobot.common.utils.utils import get_safe_dtype
+from serl_launcher.networks.pi0.configuration_pi0 import PI0Config
+from serl_launcher.networks.pi0.paligemma_with_expert import PaliGemmaWithExpertConfig
+from serl_launcher.networks.pi0.paligemma_with_expert import PaliGemmaWithExpertModel
+import torch
+from torch import Tensor
+from torch import nn
+import torch.nn.functional as F  # noqa: N812
+from transformers import AutoTokenizer
+
 # from utils.vis import visualize_attention_mask, vis_atten_map
 
 # OBS_ENV = "observation.environment_state"
@@ -78,6 +82,7 @@ OBS_ROBOT = "state"
 # OBS_IMAGE = "observation.image"
 # OBS_IMAGES = "observation.images"
 ACTION = "actions"
+
 
 def create_sinusoidal_pos_embedding(
     time: torch.tensor, dimension: int, min_period: float, max_period: float, device="cpu"
@@ -112,7 +117,7 @@ def sample_beta(alpha, beta, bsize, device):
     y = gamma_beta_dist.sample((bsize,)).to(device)
     z = x / (x + y)
     # z = (1 - z) # in official pi0,
-    return  z
+    return z
 
 
 def make_att_2d_masks(pad_masks, att_masks):
@@ -160,15 +165,14 @@ def resize_with_pad(img, width, height, pad_value=-1, mode="bilinear"):
     resized_width = int(cur_width / ratio)
 
     interpolate_params = {
-        'size': (resized_height, resized_width),
-        'mode': mode,
+        "size": (resized_height, resized_width),
+        "mode": mode,
     }
 
     if mode != "nearest":
-        interpolate_params['align_corners'] = False
+        interpolate_params["align_corners"] = False
 
     resized_img = F.interpolate(img, **interpolate_params)
-
 
     pad_height = max(0, int(height - resized_height))
     pad_width = max(0, int(width - resized_width))
@@ -274,12 +278,8 @@ class PI0Policy(PreTrainedPolicy):
         config.validate_features()
         self.config = config
         self.normalize_inputs = Normalize(config.input_features, config.normalization_mapping, dataset_stats)
-        self.normalize_targets = Normalize(
-            config.output_features, config.normalization_mapping, dataset_stats
-        )
-        self.unnormalize_outputs = Unnormalize(
-            config.output_features, config.normalization_mapping, dataset_stats
-        )
+        self.normalize_targets = Normalize(config.output_features, config.normalization_mapping, dataset_stats)
+        self.unnormalize_outputs = Unnormalize(config.output_features, config.normalization_mapping, dataset_stats)
 
         self.language_tokenizer = AutoTokenizer.from_pretrained("google/paligemma-3b-pt-224")
         self.model = PI0FlowMatching(config)
@@ -664,16 +664,14 @@ class PI0FlowMatching(nn.Module):
         # Set attention masks so that image, language and state inputs do not attend to action tokens
         att_masks += [1] + ([0] * (self.config.n_action_steps - 1))
 
-        embs = torch.cat(embs, dim=1) # torch.float32
+        embs = torch.cat(embs, dim=1)  # torch.float32
         pad_masks = torch.cat(pad_masks, dim=1)
         att_masks = torch.tensor(att_masks, dtype=embs.dtype, device=embs.device)
         att_masks = att_masks[None, :].expand(bsize, len(att_masks))
 
         return embs, pad_masks, att_masks
 
-    def forward(
-        self, images, img_masks, lang_tokens, lang_masks, state, actions, noise=None, time=None
-    ) -> Tensor:
+    def forward(self, images, img_masks, lang_tokens, lang_masks, state, actions, noise=None, time=None) -> Tensor:
         """Do a full training forward pass and compute the loss (batch_size x num_steps x num_motors)"""
         if noise is None:
             noise = self.sample_noise(actions.shape, actions.device)
@@ -685,9 +683,7 @@ class PI0FlowMatching(nn.Module):
         x_t = time_expanded * noise + (1 - time_expanded) * actions
         u_t = noise - actions
 
-        prefix_embs, prefix_pad_masks, prefix_att_masks = self.embed_prefix(
-            images, img_masks, lang_tokens, lang_masks
-        )
+        prefix_embs, prefix_pad_masks, prefix_att_masks = self.embed_prefix(images, img_masks, lang_tokens, lang_masks)
         suffix_embs, suffix_pad_masks, suffix_att_masks = self.embed_suffix(state, x_t, time)
 
         pad_masks = torch.cat([prefix_pad_masks, suffix_pad_masks], dim=1)
@@ -707,12 +703,14 @@ class PI0FlowMatching(nn.Module):
         suffix_out = suffix_out[:, -self.config.n_action_steps :]
         # Original openpi code, upcast attention output
         # suffix_out = suffix_out.to(dtype=torch.float32)
-        v_t = self.action_out_proj(suffix_out) # torch.float32 -> bf16
+        v_t = self.action_out_proj(suffix_out)  # torch.float32 -> bf16
 
-        losses = F.mse_loss(u_t.float(), v_t.float(), reduction="none") # bf16 -> torch.float32
+        losses = F.mse_loss(u_t.float(), v_t.float(), reduction="none")  # bf16 -> torch.float32
         return losses
 
-    def sample_actions(self, images, img_masks, lang_tokens, lang_masks, state, noise=None, vis_attn=False, deterministic=False) -> Tensor:
+    def sample_actions(
+        self, images, img_masks, lang_tokens, lang_masks, state, noise=None, vis_attn=False, deterministic=False
+    ) -> Tensor:
         """Do a full inference forward and compute the action (batch_size x num_steps x num_motors)"""
         bsize = state.shape[0]
         device = state.device
@@ -722,9 +720,7 @@ class PI0FlowMatching(nn.Module):
             actions_shape = (bsize, self.config.n_action_steps, self.config.max_action_dim)
             noise = self.sample_noise(actions_shape, device)
 
-        prefix_embs, prefix_pad_masks, prefix_att_masks = self.embed_prefix(
-            images, img_masks, lang_tokens, lang_masks
-        )
+        prefix_embs, prefix_pad_masks, prefix_att_masks = self.embed_prefix(images, img_masks, lang_tokens, lang_masks)
         prefix_att_2d_masks = make_att_2d_masks(prefix_pad_masks, prefix_att_masks)
         prefix_position_ids = torch.cumsum(prefix_pad_masks, dim=1) - 1
 
@@ -763,20 +759,20 @@ class PI0FlowMatching(nn.Module):
         x_t = x_t.to(dtype=dtype)
         return x_t
 
-    def sample_actions_with_logprob(self, images, img_masks, lang_tokens, lang_masks, state, noise=None, vis_attn=False, deterministic=False) -> tuple[Tensor, Tensor]:
+    def sample_actions_with_logprob(
+        self, images, img_masks, lang_tokens, lang_masks, state, noise=None, vis_attn=False, deterministic=False
+    ) -> tuple[Tensor, Tensor]:
         bsize = state.shape[0]
         device = state.device
         dtype = state.dtype
-        
+
         num_steps = self.config.num_steps
-        
+
         if noise is None:
             actions_shape = (bsize, self.config.n_action_steps, self.config.max_action_dim)
             noise = self.sample_noise(actions_shape, device)
 
-        prefix_embs, prefix_pad_masks, prefix_att_masks = self.embed_prefix(
-            images, img_masks, lang_tokens, lang_masks
-        )
+        prefix_embs, prefix_pad_masks, prefix_att_masks = self.embed_prefix(images, img_masks, lang_tokens, lang_masks)
         prefix_att_2d_masks = make_att_2d_masks(prefix_pad_masks, prefix_att_masks)
         prefix_position_ids = torch.cumsum(prefix_pad_masks, dim=1) - 1
 
@@ -803,7 +799,7 @@ class PI0FlowMatching(nn.Module):
             # Get current time from timestep
             time = timesteps[step_idx]
             expanded_time = time.expand(bsize)
-            
+
             v_t, att_vis_output = self.denoise_step(
                 state,
                 prefix_pad_masks,
@@ -816,14 +812,15 @@ class PI0FlowMatching(nn.Module):
             sigma = sigmas[step_idx]
             sigma_prev = sigmas[step_idx + 1]
             dt = sigma_prev - sigma
-            
+
             # Compute std_dev_t following reference
             sigma_clamped = torch.where(sigma == 1, sigma_max, sigma)
             std_dev_t = torch.sqrt(sigma / (1 - sigma_clamped)) * 0.7
-            
+
             # Compute expected next state using reference formula
-            x_next_mean = (x_t * (1 + std_dev_t**2 / (2 * sigma) * dt) + 
-                          v_t * (1 + std_dev_t**2 * (1 - sigma) / (2 * sigma)) * dt)
+            x_next_mean = (
+                x_t * (1 + std_dev_t**2 / (2 * sigma) * dt) + v_t * (1 + std_dev_t**2 * (1 - sigma) / (2 * sigma)) * dt
+            )
 
             # Generate variance noise
             variance_noise = self.sample_noise(x_t.shape, device)
@@ -839,11 +836,11 @@ class PI0FlowMatching(nn.Module):
                 -((x_next.detach() - x_next_mean) ** 2) / (2 * noise_scale**2)
                 - torch.log(noise_scale)
                 - torch.log(torch.sqrt(2 * torch.tensor(torch.pi, device=device, dtype=torch.float32)))
-            )   # (batch_size, action_horizon, action_dim)
-            
+            )  # (batch_size, action_horizon, action_dim)
+
             # Mean along all but batch dimension
             log_prob = torch.mean(log_prob, dim=(1, 2))
-            
+
             total_log_prob += log_prob
             x_t = x_next
 
@@ -884,9 +881,5 @@ class PI0FlowMatching(nn.Module):
         suffix_out = outputs_embeds[1]
         suffix_out = suffix_out[:, -self.config.n_action_steps :]
         # suffix_out = suffix_out.to(dtype=torch.float32) # bf16 -> torch.float32
-        v_t = self.action_out_proj(suffix_out) # bf16 -> torch.float32
+        v_t = self.action_out_proj(suffix_out)  # bf16 -> torch.float32
         return v_t, att_vis_output
-
-
-
-

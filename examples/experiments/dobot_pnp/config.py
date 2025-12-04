@@ -1,35 +1,39 @@
+from functools import partial
 import os
-import torch
+
+from experiments.dobot_pnp.wrapper import PnpEnv
 import gymnasium as gym
 import numpy as np
-from functools import partial
-from termcolor import cprint
-
-from serl_launcher.wrappers.reward_wrapper import (
-    HumanClassifierWrapper,
-    MultiCameraBinaryRewardClassifierWrapper,
-    MultiCameraSubtaskRewardClassifierWrapper,
-    HumanResetWrapper,
-)
+from serl_launcher.networks.reward_classifier import load_classifier_func
+from serl_launcher.networks.reward_classifier import outcome_reward_func
+from serl_launcher.networks.reward_classifier import process_classifier_func
 from serl_launcher.utils.train_utils import count_params
-from serl_launcher.networks.reward_classifier import (
-    load_classifier_func, 
-    outcome_reward_func,
-    process_classifier_func,
-)
-from serl_launcher.wrappers.serl_obs_wrappers import SERLObsWrapper
-from serl_launcher.wrappers.norm import NormalizeObsEnv
 from serl_launcher.wrappers.chunking import ChunkingWrapper
+from serl_launcher.wrappers.norm import NormalizeObsEnv
+from serl_launcher.wrappers.reward_wrapper import HumanClassifierWrapper
+from serl_launcher.wrappers.reward_wrapper import HumanResetWrapper
+from serl_launcher.wrappers.reward_wrapper import MultiCameraBinaryRewardClassifierWrapper
+from serl_launcher.wrappers.reward_wrapper import MultiCameraSubtaskRewardClassifierWrapper
+from serl_launcher.wrappers.serl_obs_wrappers import SERLObsWrapper
 from serl_launcher.wrappers.video_wrapper import VideoWrapper
-from experiments.dobot_pnp.wrapper import PnpEnv
+from termcolor import cprint
+import torch
 
 
 def naive_reward_func(obs, action):
     # set a goal pose, and give reward based on how close the current pose is to the goal pose
-    goal_pose = np.array([
-        # -1.26093048,  0.05079622, -0.86221378, -0.74359046, 1.52011571, 0.40968805,  0.98039216
-        -1.36831033, -0.11180587, -1.05396258, -0.42605944, 1.51858346, 0.19339831, 0.97647059,
-    ])  # up slightly
+    goal_pose = np.array(
+        [
+            # -1.26093048,  0.05079622, -0.86221378, -0.74359046, 1.52011571, 0.40968805,  0.98039216
+            -1.36831033,
+            -0.11180587,
+            -1.05396258,
+            -0.42605944,
+            1.51858346,
+            0.19339831,
+            0.97647059,
+        ]
+    )  # up slightly
 
     # calculate the distance between the current pose and the goal pose
     current_pose = obs["state"][0] if isinstance(obs, dict) else obs
@@ -42,7 +46,7 @@ def naive_reward_func(obs, action):
     sparse_reward = 0.0
 
     # dense reward
-    max_distance = 0.5    # use state
+    max_distance = 0.5  # use state
     # max_distance = 0.3  # use action
     dense_reward = (max_distance - distance) / max_distance
 
@@ -55,6 +59,7 @@ def naive_reward_func(obs, action):
     print(f"[naive_reward_func] distance={distance:.3f}, reward={reward:.3f}")
 
     return reward
+
 
 def get_environment(fake_env=False, env_config=None, proprio_keys=None):
     env = PnpEnv(
@@ -77,23 +82,23 @@ def get_environment(fake_env=False, env_config=None, proprio_keys=None):
                 n_way=env_config.classifier_n_way,
             )
             classifier = classifier.cuda()
-            cprint(f"classifier parameters: {count_params(classifier)/1e6:.2f}M", "yellow")
-        
+            cprint(f"classifier parameters: {count_params(classifier) / 1e6:.2f}M", "yellow")
+
         if env_config.reward_type == "naive":
             env = MultiCameraBinaryRewardClassifierWrapper(
                 env, naive_reward_func, success_threshold=env_config.success_threshold
             )
         elif env_config.reward_type == "outcome":
             env = MultiCameraBinaryRewardClassifierWrapper(
-                env, 
+                env,
                 partial(outcome_reward_func, classifier=classifier, env_config=env_config),
-                success_threshold=env_config.success_threshold
+                success_threshold=env_config.success_threshold,
             )
         elif env_config.reward_type == "process":
             env = MultiCameraSubtaskRewardClassifierWrapper(
-                env, 
-                partial(process_classifier_func, classifier=classifier, env_config=env_config), 
-                n_way=env_config.classifier_n_way
+                env,
+                partial(process_classifier_func, classifier=classifier, env_config=env_config),
+                n_way=env_config.classifier_n_way,
             )
         elif env_config.reward_type == "human":
             # env = HumanClassifierWrapper(env)
@@ -104,14 +109,14 @@ def get_environment(fake_env=False, env_config=None, proprio_keys=None):
         env = HumanResetWrapper(
             env,
             wait_for_after_done_time=env_config.wait_for_after_done_time,
-            wait_for_after_reset_time=env_config.wait_for_after_reset_time
+            wait_for_after_reset_time=env_config.wait_for_after_reset_time,
         )
 
         if env_config.save_video:
             env = VideoWrapper(
                 env,
                 image_keys=env_config.image_keys,
-                video_dir='./videos',
+                video_dir="./videos",
                 fps=5,
             )
 

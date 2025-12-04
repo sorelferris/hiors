@@ -1,5 +1,8 @@
 #!/bin/bash
 
+# If your GPU does not support P2P or IB
+ export NCCL_P2P_DISABLE="1" && export NCCL_IB_DISABLE="1"
+
 export HYDRA_FULL_ERROR=1
 
 UNIQUE_IDENTIFIER=data_collection
