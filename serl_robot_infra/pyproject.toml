@@ -20,7 +20,7 @@ dependencies = [
 ]
 
 [tool.hatch.build.targets.wheel]
-packages = ["dorobot_env"]
+packages = ["dobot_env"]
 
 [build-system]
 requires = ["hatchling"]

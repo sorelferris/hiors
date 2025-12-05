@@ -22,6 +22,11 @@ dev = [
     "pynvml>=12.0.0",
 ]
 
+[[tool.uv.index]]
+name = "pypi-mirror"
+url = "https://pypi.tuna.tsinghua.edu.cn/simple"
+default = true
+
 [tool.uv.sources]
 openpi-client = { workspace = true }
 serl-robot-infra = { workspace = true }
