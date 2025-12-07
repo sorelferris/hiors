@@ -1,13 +1,16 @@
 # !/usr/bin/env python3
 
 import os
-import torch
+
 from termcolor import cprint
+import torch
 
 from serl_launcher.agents.continuous.sac_pi0 import SACPiAgent
-from serl_launcher.vision.data_augmentations import batched_random_crop, batched_color_transform
-from serl_launcher.utils.train_utils import count_params, count_params_trainable
 from serl_launcher.common.typing import Batch
+from serl_launcher.utils.train_utils import count_params
+from serl_launcher.utils.train_utils import count_params_trainable
+from serl_launcher.vision.data_augmentations import batched_color_transform
+from serl_launcher.vision.data_augmentations import batched_random_crop
 
 
 def make_sac_pi0_agent(
@@ -33,7 +36,7 @@ def make_sac_pi0_agent(
     optimizer_kwargs=None,
     lr_scheduler_kwargs=None,
     device="cuda" if torch.cuda.is_available() else "cpu",
-):  
+):
     # Create SAC Pi0 agent and get unified optimizer
     agent, unified_optimizer, lr_scheduler = SACPiAgent.create_pixels(
         sample_obs,
@@ -63,19 +66,20 @@ def make_sac_pi0_agent(
         device=device,
         lr_scheduler_kwargs=lr_scheduler_kwargs,
     )
-    
+
     trainable_params, total_params = get_param_count(agent)
-    cprint(f"SAC Pi0 Agent Created:", "green")
+    cprint("SAC Pi0 Agent Created:", "green")
     cprint(f"  OpenPI Config: {openpi_config_name}", "cyan")
-    cprint(f"  Trainable parameters: {trainable_params/1e6:.2f}M (OpenPI + critic networks)", "yellow")
-    cprint(f"  Total parameters: {total_params/1e6:.2f}M", "yellow")
-    
+    cprint(f"  Trainable parameters: {trainable_params / 1e6:.2f}M (OpenPI + critic networks)", "yellow")
+    cprint(f"  Total parameters: {total_params / 1e6:.2f}M", "yellow")
+
     return agent, unified_optimizer, lr_scheduler
 
 
 #########################
 # Helper functions
 #########################
+
 
 def get_param_count(agent):
     """
@@ -86,9 +90,9 @@ def get_param_count(agent):
     param_count_dict["actor"] = count_params(agent.actor)
     param_count_dict["critic"] = count_params(agent.critic)
     param_count_dict["temperature"] = count_params(agent.temperature)
-    
+
     for key, value in param_count_dict.items():
-        print(f"{key}: {value/1e6:.2f}M")
+        print(f"{key}: {value / 1e6:.2f}M")
 
     trainable_param_count_dict = {}
     trainable_param_count_dict["actor"] = count_params_trainable(agent.actor)
@@ -96,25 +100,23 @@ def get_param_count(agent):
     trainable_param_count_dict["temperature"] = count_params_trainable(agent.temperature)
 
     for key, value in trainable_param_count_dict.items():
-        print(f"{key} (trainable): {value/1e6:.2f}M")
-    
+        print(f"{key} (trainable): {value / 1e6:.2f}M")
+
     total_params = sum(param_count_dict.values())
     trainable_params = sum(trainable_param_count_dict.values())
-    
-    return trainable_params, total_params
-    
-def make_batch_augmentation_func(image_keys) -> callable:
 
+    return trainable_params, total_params
+
+
+def make_batch_augmentation_func(image_keys) -> callable:
     def data_augmentation_fn(observations):
         """Data augmentation function that works with PyTorch tensors"""
-        
+
         # Image augmentation
         for pixel_key in image_keys:
             if pixel_key in observations:
                 # Apply random crop with padding
-                observations[pixel_key] = batched_random_crop(
-                    observations[pixel_key], padding=8, num_batch_dims=2
-                )
+                observations[pixel_key] = batched_random_crop(observations[pixel_key], padding=8, num_batch_dims=2)
                 # Uncomment for color augmentation
                 # observations[pixel_key] = batched_color_transform(
                 #     observations[pixel_key],
@@ -128,7 +130,7 @@ def make_batch_augmentation_func(image_keys) -> callable:
                 #     shuffle=True,
                 #     num_batch_dims=2,
                 # )
-        
+
         # State (proprioception) augmentation
         # if "state" in observations:
         #     state_noise_scale = 0.1
@@ -137,21 +139,21 @@ def make_batch_augmentation_func(image_keys) -> callable:
         #     noise = torch.randn_like(state) * state_noise_scale
         #     augmented_state = state + noise
         #     observations["state"] = augmented_state
-            
+
         return observations
-    
+
     def augment_batch(batch: Batch) -> Batch:
         """Augment a batch of data"""
         obs = data_augmentation_fn(batch["observations"])
         next_obs = data_augmentation_fn(batch["next_observations"])
-        
+
         # Update batch with augmented observations
-        batch = batch.copy() if hasattr(batch, 'copy') else dict(batch)
+        batch = batch.copy() if hasattr(batch, "copy") else dict(batch)
         batch["observations"] = obs
         batch["next_observations"] = next_obs
-        
+
         return batch
-    
+
     return augment_batch
 
 
@@ -164,7 +166,8 @@ def make_wandb_logger(
     offline: bool = False,
     variant: dict = {},
 ):
-    from serl_launcher.common.wandb import WandBLogger
+    from serl_launcher.common.wandb import WandBLogger  # noqa
+
     wandb_config = WandBLogger.get_default_config()
     wandb_config.update(
         {
@@ -195,7 +198,8 @@ def make_tensorboard_logger(
     debug: bool = False,
     log_dir: str = None,
 ):
-    from serl_launcher.common.tensorboard import TensorBoardLogger
+    from serl_launcher.common.tensorboard import TensorBoardLogger  # noqa
+
     tensorboard_config = TensorBoardLogger.get_default_config()
     tensorboard_config.update(
         {

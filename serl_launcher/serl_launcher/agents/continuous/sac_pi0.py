@@ -1,29 +1,28 @@
-import logging
 import copy
 from functools import partial
-from typing import Iterable, Optional, Tuple, Dict, Any
-from termcolor import cprint
 import gc
+import logging
 import time
+from typing import Any, Dict, Iterable, Optional, Tuple
 
-import torch
-import torch.nn as nn
-import torch.nn.functional as F
-import torch.optim as optim
+from lerobot.common.optim.schedulers import CosineDecayWithWarmupSchedulerConfig
 import numpy as np
-
 from serl_launcher.common.encoding import EncodingWrapper
-from serl_launcher.common.typing import Batch, Data
-from serl_launcher.networks.actor_critic_nets import Critic, ensemblize
+from serl_launcher.common.typing import Batch
+from serl_launcher.common.typing import Data
+from serl_launcher.networks.actor_critic_nets import Critic
+from serl_launcher.networks.actor_critic_nets import ensemblize
 from serl_launcher.networks.lagrange import GeqLagrangeMultiplier
 from serl_launcher.networks.mlp import MLP
+from serl_launcher.networks.pi0.modeling_pi0 import PI0Config
+from serl_launcher.networks.pi0.modeling_pi0 import PI0Policy
 from serl_launcher.networks.transformer import Transformer
 from serl_launcher.utils.logging_utils import print_dict_mean
-from serl_launcher.networks.pi0.modeling_pi0 import PI0Policy, PI0Config
-
-from lerobot.common.optim.schedulers import (
-    CosineDecayWithWarmupSchedulerConfig,
-)
+from termcolor import cprint
+import torch
+import torch.nn as nn
+import torch.nn.functional as F  # noqa
+import torch.optim as optim
 
 logger = logging.getLogger(__name__)
 
@@ -31,7 +30,7 @@ logger = logging.getLogger(__name__)
 class SACPiAgent(nn.Module):
     """
     SAC agent with PI0 policy and small critic networks (PyTorch implementation).
-    
+
     This agent uses a pre-trained PI0 model as the policy which gets fine-tuned
     during SAC training, while training small critic networks for value estimation.
     Both the PI0 policy parameters and critic networks are updated during training.
@@ -46,11 +45,11 @@ class SACPiAgent(nn.Module):
         device: str = "cuda",
     ):
         super().__init__()
-        
+
         self.config = config
         self.device = device
         self.action_dim = config["action_dim"]
-        
+
         # Networks
         self.actor = actor
         self.ref_actor = copy.deepcopy(actor) if config["distill_weight"] > 0 else None
@@ -59,12 +58,12 @@ class SACPiAgent(nn.Module):
         # turn off gradients
         if self.ref_actor is not None:
             for param in self.ref_actor.parameters():
-                param.requires_grad_(False)
+                param.requires_grad_(mode=False)
         for param in self.target_critic.parameters():
-            param.requires_grad_(False)
+            param.requires_grad_(mode=False)
         self.temperature = temperature
         self.axis_to_id = {"x": 0, "y": 1, "z": 2, "rx": 3, "ry": 4, "rz": 5, "rw": 6, "gripper": 7}
-        
+
     def _batch_transform_observations(self, observations: Data) -> Data:
         """
         Transform batched SERL observations to PI0 format.
@@ -75,7 +74,7 @@ class SACPiAgent(nn.Module):
         """
         observations = copy.deepcopy(observations)
         batch_size = observations["state"].shape[0]
-    
+
         pi0_obs = observations.copy()
 
         # Handle images (B, T, H, W, C) -> (B, T, C, H, W)
@@ -104,14 +103,14 @@ class SACPiAgent(nn.Module):
         # Ensure actions are in the right format (B, T, A) and truncate to 8 dimensions
         if actions.dim() == 2:  # (B, A) -> (B, 1, A)
             actions = actions.unsqueeze(1)
-        actions = actions[..., :self.action_dim]
-        
+        actions = actions[..., : self.action_dim]
+
         if train:
             self.critic.train()
         else:
             self.critic.eval()
         return self.critic(observations, actions)
-    
+
     @torch.no_grad()
     def forward_target_critic(
         self,
@@ -122,8 +121,8 @@ class SACPiAgent(nn.Module):
         # Ensure actions are in the right format (B, T, A) and truncate to 8 dimensions
         if actions.dim() == 2:  # (B, A) -> (B, 1, A)
             actions = actions.unsqueeze(1)
-        actions = actions[..., :self.action_dim]
-        
+        actions = actions[..., : self.action_dim]
+
         self.target_critic.eval()
         return self.target_critic(observations, actions)
 
@@ -135,7 +134,7 @@ class SACPiAgent(nn.Module):
     ) -> Tuple[torch.Tensor, torch.Tensor]:
         """
         Forward pass for PI0 policy network.
-        
+
         Args:
             observations: Input observations in PI0 format
             deterministic: Whether to use deterministic sampling
@@ -153,7 +152,7 @@ class SACPiAgent(nn.Module):
         transform_obs["cam_right_wrist"] = observations["cam_right_wrist"][:, 0, ...]
         transform_obs["state"] = observations["state"][:, 0, ...]
         # observations["task"] = ["put the objects in the box"] * observations["state"].shape[0]
-        
+
         # Prepare inputs using PI0's preprocessing methods
         images, img_masks = self.actor.prepare_images(transform_obs)
         state = self.actor.prepare_state(transform_obs)
@@ -164,7 +163,7 @@ class SACPiAgent(nn.Module):
         actions = self.actor.model.sample_actions(
             images, img_masks, lang_tokens, lang_masks, state, noise=None, deterministic=deterministic
         )
-        actions = actions[..., :self.action_dim]
+        actions = actions[..., : self.action_dim]
 
         return actions, log_probs
 
@@ -177,7 +176,7 @@ class SACPiAgent(nn.Module):
     ) -> Tuple[torch.Tensor, torch.Tensor]:
         """
         Forward pass for PI0 policy network.
-        
+
         Args:
             observations: Input observations in PI0 format
             deterministic: Whether to use deterministic sampling
@@ -192,7 +191,7 @@ class SACPiAgent(nn.Module):
         transform_obs["cam_right_wrist"] = observations["cam_right_wrist"][:, 0, ...]
         transform_obs["state"] = observations["state"][:, 0, ...]
         # observations["task"] = ["put the objects in the box"] * observations["state"].shape[0]
-        
+
         # Prepare inputs using PI0's preprocessing methods
         images, img_masks = self.ref_actor.prepare_images(transform_obs)
         state = self.ref_actor.prepare_state(transform_obs)
@@ -203,7 +202,7 @@ class SACPiAgent(nn.Module):
         actions = self.ref_actor.model.sample_actions(
             images, img_masks, lang_tokens, lang_masks, state, noise=None, deterministic=True
         )
-        actions = actions[..., :self.action_dim]
+        actions = actions[..., : self.action_dim]
 
         return actions, log_probs
 
@@ -233,23 +232,24 @@ class SACPiAgent(nn.Module):
 
             # Subsample if requested
             if self.config["critic_subsample_size"] is not None:
-                indices = torch.randint(0, self.config["critic_ensemble_size"], 
-                                    (self.config["critic_subsample_size"],), device=target_next_qs.device)
+                indices = torch.randint(
+                    0,
+                    self.config["critic_ensemble_size"],
+                    (self.config["critic_subsample_size"],),
+                    device=target_next_qs.device,
+                )
                 target_next_qs = target_next_qs[indices]
 
             target_next_min_q = target_next_qs.min(dim=0)[0]  # [batch_size]
 
-            target_q = (
-                batch["rewards"]
-                + self.config["discount"] * batch["masks"] * target_next_min_q
-            )
+            target_q = batch["rewards"] + self.config["discount"] * batch["masks"] * target_next_min_q
 
             if self.config["backup_entropy"]:
                 temperature = self.forward_temperature()
                 target_q = target_q - temperature * next_actions_log_probs
 
         predicted_qs_1 = self.forward_critic(batch["observations"], batch["actions"], train=True)
-        target_qs = target_q.unsqueeze(0).repeat(self.config["critic_ensemble_size"], 1)    # [ensemble_size, batch_size]
+        target_qs = target_q.unsqueeze(0).repeat(self.config["critic_ensemble_size"], 1)  # [ensemble_size, batch_size]
         critic_loss_1 = F.mse_loss(predicted_qs_1, target_qs.detach())  # [ensemble_size, batch_size] -> [1]
 
         # Initialize CQL-related variables for logging
@@ -271,7 +271,7 @@ class SACPiAgent(nn.Module):
             # https://github.com/tinkoff-ai/CORL/blob/main/algorithms/offline/cql.py
             batch_size = batch["actions"].shape[0]
             cql_n_actions = self.config["cql_n_actions"]
-            
+
             def repeat_observations(obs_dict, repeat_factor):
                 """Repeat observations for CQL sampling."""
                 repeated_obs = {}
@@ -282,15 +282,20 @@ class SACPiAgent(nn.Module):
                         # Repeat each batch element repeat_factor times: [B, ...] -> [B*N, ...]
                         repeated_obs[key] = value.repeat_interleave(repeat_factor, dim=0)
                 return repeated_obs
-            
+
             with torch.no_grad():
                 # all actions is (B*N, T, A) with action chunking
-                cql_random_actions = torch.rand(
-                    batch_size * cql_n_actions, *batch["actions"].shape[1:], 
-                    device=batch["actions"].device,
-                    dtype=batch["actions"].dtype
-                ) * 40.0 - 20.0
-                cql_random_actions = cql_random_actions[..., :self.action_dim]
+                cql_random_actions = (
+                    torch.rand(
+                        batch_size * cql_n_actions,
+                        *batch["actions"].shape[1:],
+                        device=batch["actions"].device,
+                        dtype=batch["actions"].dtype,
+                    )
+                    * 40.0
+                    - 20.0
+                )
+                cql_random_actions = cql_random_actions[..., : self.action_dim]
                 repeated_current_obs = repeat_observations(batch["observations"], cql_n_actions)
                 cql_current_actions, cql_current_log_probs = self.forward_policy(
                     repeated_current_obs, deterministic=False, train=False
@@ -298,7 +303,7 @@ class SACPiAgent(nn.Module):
                 repeated_next_obs = repeat_observations(batch["next_observations"], cql_n_actions)
                 cql_next_actions, cql_next_log_probs = self.forward_policy(
                     repeated_next_obs, deterministic=False, train=False
-                )   # [B*N, T, A], [B*N]
+                )  # [B*N, T, A], [B*N]
 
             cql_current_actions, cql_current_log_probs = (
                 cql_current_actions.detach(),
@@ -309,53 +314,57 @@ class SACPiAgent(nn.Module):
                 cql_next_log_probs.detach(),
             )
 
-            all_cql_actions = torch.cat([
-                cql_random_actions,
-                cql_current_actions,
-                cql_next_actions
-            ], dim=0)  # [3*B*N, T, A]
-            
+            all_cql_actions = torch.cat(
+                [cql_random_actions, cql_current_actions, cql_next_actions], dim=0
+            )  # [3*B*N, T, A]
+
             all_repeated_current_obs = repeat_observations(repeated_current_obs, 3)
-            all_cql_q_values = self.forward_critic(all_repeated_current_obs, all_cql_actions, train=True)  # [ensemble_size, 3*B*N]
+            all_cql_q_values = self.forward_critic(
+                all_repeated_current_obs, all_cql_actions, train=True
+            )  # [ensemble_size, 3*B*N]
 
             total_samples = batch_size * cql_n_actions
             cql_q_random = all_cql_q_values[:, :total_samples]  # [ensemble_size, B*N]
-            cql_q_current = all_cql_q_values[:, total_samples:2*total_samples]  # [ensemble_size, B*N]
-            cql_q_next = all_cql_q_values[:, 2*total_samples:]  # [ensemble_size, B*N]
+            cql_q_current = all_cql_q_values[:, total_samples : 2 * total_samples]  # [ensemble_size, B*N]
+            cql_q_next = all_cql_q_values[:, 2 * total_samples :]  # [ensemble_size, B*N]
 
             cql_q_random = cql_q_random.reshape(self.config["critic_ensemble_size"], batch_size, cql_n_actions)
             cql_q_current = cql_q_current.reshape(self.config["critic_ensemble_size"], batch_size, cql_n_actions)
             cql_q_next = cql_q_next.reshape(self.config["critic_ensemble_size"], batch_size, cql_n_actions)
-            
+
             if self.config["cql_importance_sample"]:
-                random_density = torch.log(torch.tensor(
-                    0.5 ** batch["actions"].shape[-1],
-                    device=batch["actions"].device,
-                    dtype=batch["actions"].dtype
-                ))
+                random_density = torch.log(
+                    torch.tensor(
+                        0.5 ** batch["actions"].shape[-1], device=batch["actions"].device, dtype=batch["actions"].dtype
+                    )
+                )
                 # [B*N]
-                cql_next_log_probs_expand = cql_next_log_probs.reshape(batch_size, cql_n_actions).unsqueeze(0)  # [1, B, N]
-                cql_current_log_probs_expand = cql_current_log_probs.reshape(batch_size, cql_n_actions).unsqueeze(0)  # [1, B, N]
+                cql_next_log_probs_expand = cql_next_log_probs.reshape(batch_size, cql_n_actions).unsqueeze(
+                    0
+                )  # [1, B, N]
+                cql_current_log_probs_expand = cql_current_log_probs.reshape(batch_size, cql_n_actions).unsqueeze(
+                    0
+                )  # [1, B, N]
                 # Concatenate Q-values with importance sampling correction
-                cql_cat_q = torch.cat([
-                    cql_q_random - random_density,
-                    cql_q_next - cql_next_log_probs_expand,
-                    cql_q_current - cql_current_log_probs_expand,
-                ], dim=2)
-            else:   # True
+                cql_cat_q = torch.cat(
+                    [
+                        cql_q_random - random_density,
+                        cql_q_next - cql_next_log_probs_expand,
+                        cql_q_current - cql_current_log_probs_expand,
+                    ],
+                    dim=2,
+                )
+            else:  # True
                 data_q_expanded = predicted_qs_1.unsqueeze(2)  # [ensemble_size, batch_size, 1]
-                cql_cat_q = torch.cat([
-                    cql_q_random, 
-                    data_q_expanded, 
-                    cql_q_next, 
-                    cql_q_current
-                ], dim=2)   # [ensemble_size, batch_size, 4]
-            
+                cql_cat_q = torch.cat(
+                    [cql_q_random, data_q_expanded, cql_q_next, cql_q_current], dim=2
+                )  # [ensemble_size, batch_size, 4]
+
             cql_temp = 1.0
             cql_qf_ood = torch.logsumexp(cql_cat_q / cql_temp, dim=2) * cql_temp
-            
+
             # CQL loss: E[log sum exp(Q(s,a)) - Q(s,a_data)]
-            critic_loss_2 = (cql_qf_ood - predicted_qs_1).mean()    # [ensemble_size, batch_size] -> [1]
+            critic_loss_2 = (cql_qf_ood - predicted_qs_1).mean()  # [ensemble_size, batch_size] -> [1]
 
             critic_info.update(
                 {
@@ -368,16 +377,18 @@ class SACPiAgent(nn.Module):
             )
             critic_loss += self.config["cql_weight"] * critic_loss_2
 
-        critic_info.update({
-            "critic_loss": critic_loss.item(),
-            "critic_loss_1": critic_loss_1.item(),  # Bellman loss
-            "predicted_qs_1": predicted_qs_1.mean().item(),
-            # **{f"predicted_next_{key}": next_actions[0, :, self.axis_to_id[key]].mean().item() \
-            #    for key in self.axis_to_id.keys()},
-            "target_qs": target_qs.mean().item(),
-            "rewards": batch["rewards"].mean().item(),
-            "dones": 1.0 - batch["masks"].float().mean().item(),
-        })
+        critic_info.update(
+            {
+                "critic_loss": critic_loss.item(),
+                "critic_loss_1": critic_loss_1.item(),  # Bellman loss
+                "predicted_qs_1": predicted_qs_1.mean().item(),
+                # **{f"predicted_next_{key}": next_actions[0, :, self.axis_to_id[key]].mean().item() \
+                #    for key in self.axis_to_id.keys()},
+                "target_qs": target_qs.mean().item(),
+                "rewards": batch["rewards"].mean().item(),
+                "dones": 1.0 - batch["masks"].float().mean().item(),
+            }
+        )
 
         return critic_loss, critic_info
 
@@ -388,28 +399,26 @@ class SACPiAgent(nn.Module):
             temperature = self.forward_temperature()
 
         # Get actions and log probs from PI0 policy
-        actions, log_probs = self.forward_policy(
-            batch["observations"], deterministic=False, train=True
-        )
+        actions, log_probs = self.forward_policy(batch["observations"], deterministic=False, train=True)
 
         # prevent critic gradients but keep actor gradients
         for param in self.critic.parameters():
             param.requires_grad_(False)
-            
+
         predicted_qs = self.forward_critic(
             batch["observations"],
             actions,
             train=False,
         )
         predicted_q = predicted_qs.mean(dim=0)
-        
+
         # Re-enable gradients for critic parameters
         for param in self.critic.parameters():
             param.requires_grad_(True)
 
         # SAC actor objective: maximize Q - temperature * entropy
         actor_objective = predicted_q - temperature * log_probs
-        q_loss = - actor_objective.mean()
+        q_loss = -actor_objective.mean()
 
         info = {}
 
@@ -418,34 +427,38 @@ class SACPiAgent(nn.Module):
         if self.ref_actor is not None:
             # Use reference actor actions as target for distillation
             with torch.no_grad():
-                ref_actions, _ = self.forward_ref_policy(
-                    batch["observations"], deterministic=True, train=False
-                )
-            target_actions = ref_actions[..., :self.action_dim]  # [B, T, action_dim]
-            predicted_actions = actions[..., :self.action_dim]  # [B, T, action_dim]
+                ref_actions, _ = self.forward_ref_policy(batch["observations"], deterministic=True, train=False)
+            target_actions = ref_actions[..., : self.action_dim]  # [B, T, action_dim]
+            predicted_actions = actions[..., : self.action_dim]  # [B, T, action_dim]
             distill_loss = F.mse_loss(predicted_actions, target_actions)
-            info.update({
-                "distill_loss": distill_loss.item(),
-                # "diff_mean": (predicted_actions - target_actions).pow(2).mean().item(),
-                # "diff_std": (predicted_actions - target_actions).pow(2).std().item(),
-            })
+            info.update(
+                {
+                    "distill_loss": distill_loss.item(),
+                    # "diff_mean": (predicted_actions - target_actions).pow(2).mean().item(),
+                    # "diff_std": (predicted_actions - target_actions).pow(2).std().item(),
+                }
+            )
             actor_loss += q_loss + self.config["distill_weight"] * distill_loss
 
-        info.update({
-            "actor_loss": actor_loss.item(),
-            "q_loss": q_loss.item(),
-            **{f"predicted_{key}": actions[:, :, self.axis_to_id[key]].mean().item() \
-                for key in self.axis_to_id.keys()}, 
-            # if only use demo buffer
-            # **{f"gt_{key}": batch["actions"][:, :, self.axis_to_id[key]].mean().item() \
-            #     for key in self.axis_to_id.keys()},
-            # **{f"diff_{key}": (actions[:, :, self.axis_to_id[key]] - batch["actions"][:, :, self.axis_to_id[key]]).pow(2).mean().item() \
-            #     for key in self.axis_to_id.keys()},
-            # "diff_mean": (actions[:, :, :self.action_dim] - batch["actions"][:, :, :self.action_dim]).pow(2).mean().item(),
-            # "diff_std": (actions[:, :, :self.action_dim] - batch["actions"][:, :, :self.action_dim]).pow(2).std().item(),
-            "temperature": temperature.item(),
-            "entropy": -log_probs.mean().item(),
-        })
+        info.update(
+            {
+                "actor_loss": actor_loss.item(),
+                "q_loss": q_loss.item(),
+                **{
+                    f"predicted_{key}": actions[:, :, self.axis_to_id[key]].mean().item()
+                    for key in self.axis_to_id.keys()
+                },
+                # if only use demo buffer
+                # **{f"gt_{key}": batch["actions"][:, :, self.axis_to_id[key]].mean().item() \
+                #     for key in self.axis_to_id.keys()},
+                # **{f"diff_{key}": (actions[:, :, self.axis_to_id[key]] - batch["actions"][:, :, self.axis_to_id[key]]).pow(2).mean().item() \
+                #     for key in self.axis_to_id.keys()},
+                # "diff_mean": (actions[:, :, :self.action_dim] - batch["actions"][:, :, :self.action_dim]).pow(2).mean().item(),
+                # "diff_std": (actions[:, :, :self.action_dim] - batch["actions"][:, :, :self.action_dim]).pow(2).std().item(),
+                "temperature": temperature.item(),
+                "entropy": -log_probs.mean().item(),
+            }
+        )
 
         return actor_loss, info
 
@@ -455,10 +468,9 @@ class SACPiAgent(nn.Module):
 
         entropy = -next_actions_log_probs.mean()
         temperature_loss = self.temperature(
-            lhs=entropy, 
-            rhs=torch.tensor(self.config["target_entropy"], device=entropy.device)
+            lhs=entropy, rhs=torch.tensor(self.config["target_entropy"], device=entropy.device)
         )
-        
+
         return temperature_loss, {"temperature_loss": temperature_loss.item()}
 
     def sft_loss_fn(self, batch: Batch) -> Tuple[torch.Tensor, Dict]:
@@ -488,29 +500,41 @@ class SACPiAgent(nn.Module):
 
         # Remove unrelated action dimensions (e.g., right arm, tactile?)
         # losses = losses[:, :, :self.action_dim]
-        losses = losses[:, :, :7]   # only left arm
+        losses = losses[:, :, :7]  # only left arm
 
         sft_loss = losses.mean()
-        
-        # Report the diff between gt and predicted action 
+
+        # Report the diff between gt and predicted action
         with torch.no_grad():
             actions = self.actor.model.sample_actions(
                 images, img_masks, lang_tokens, lang_masks, state, noise=None, deterministic=False
             )
-            actions = actions[:, :, :self.action_dim]
+            actions = actions[:, :, : self.action_dim]
 
         info = {
             "sft_loss": sft_loss.item(),
-            **{f"predicted_{key}": actions[:, :, self.axis_to_id[key]].mean().item() \
-                for key in self.axis_to_id.keys()},
-            **{f"gt_{key}": batch["actions"][:, :, self.axis_to_id[key]].mean().item() \
-                for key in self.axis_to_id.keys()},
-            **{f"diff_{key}": (actions[:, :, self.axis_to_id[key]] - batch["actions"][:, :, self.axis_to_id[key]]).pow(2).mean().item() \
-                for key in self.axis_to_id.keys()},
-            "diff_mean": (actions[:, :, :self.action_dim] - batch["actions"][:, :, :self.action_dim]).pow(2).mean().item(),
-            "diff_std": (actions[:, :, :self.action_dim] - batch["actions"][:, :, :self.action_dim]).pow(2).std().item(),
+            **{f"predicted_{key}": actions[:, :, self.axis_to_id[key]].mean().item() for key in self.axis_to_id.keys()},
+            **{
+                f"gt_{key}": batch["actions"][:, :, self.axis_to_id[key]].mean().item()
+                for key in self.axis_to_id.keys()
+            },
+            **{
+                f"diff_{key}": (actions[:, :, self.axis_to_id[key]] - batch["actions"][:, :, self.axis_to_id[key]])
+                .pow(2)
+                .mean()
+                .item()
+                for key in self.axis_to_id.keys()
+            },
+            "diff_mean": (actions[:, :, : self.action_dim] - batch["actions"][:, :, : self.action_dim])
+            .pow(2)
+            .mean()
+            .item(),
+            "diff_std": (actions[:, :, : self.action_dim] - batch["actions"][:, :, : self.action_dim])
+            .pow(2)
+            .std()
+            .item(),
         }
-        
+
         return sft_loss, info
 
     def prepare_batches(self, batch: Batch) -> Batch:
@@ -543,10 +567,10 @@ class SACPiAgent(nn.Module):
     def forward(self, batch: Batch, networks_to_update: list, training_mode: str = "rl") -> tuple:
         self.train()
         batch = self.prepare_batches(batch)
-        
+
         info = {}
         total_loss = 0.0
-        
+
         if training_mode == "rl":
             if "critic" in networks_to_update:
                 critic_loss, critic_info = self.critic_loss_fn(batch)
@@ -562,7 +586,7 @@ class SACPiAgent(nn.Module):
                 temp_loss, temp_info = self.temperature_loss_fn(batch)
                 total_loss += temp_loss
                 info["temperature"] = temp_info
-                
+
         elif training_mode == "sft":
             if "actor" in networks_to_update:
                 sft_loss, sft_info = self.sft_loss_fn(batch)
@@ -570,14 +594,14 @@ class SACPiAgent(nn.Module):
                 info["actor"] = sft_info
 
         return total_loss, info
-    
+
     def train(self):
         """Set training mode."""
         self.critic.train()
         self.target_critic.train()
         self.temperature.train()
         self.actor.train()
-        
+
     def eval(self):
         """Set evaluation mode."""
         self.critic.eval()
@@ -592,17 +616,17 @@ class SACPiAgent(nn.Module):
     ) -> torch.Tensor:
         """Sample actions from the policy."""
         self.actor.eval()
-        
+
         # Get device from model parameters
         device = next(self.actor.parameters()).device
-        
+
         # (B, H, W, C) -> (B, C, H, W)
         batch = {
-            "cam_high": torch.Tensor(obs['cam_high']).permute(0, 3, 1, 2).to(device),
-            "cam_left_wrist": torch.Tensor(obs['cam_left_wrist']).permute(0, 3, 1, 2).to(device),
-            "cam_right_wrist": torch.Tensor(obs['cam_right_wrist']).permute(0, 3, 1, 2).to(device),
-            "state": torch.Tensor(obs['state']).to(device),
-            'task': [obs['prompt']],
+            "cam_high": torch.Tensor(obs["cam_high"]).permute(0, 3, 1, 2).to(device),
+            "cam_left_wrist": torch.Tensor(obs["cam_left_wrist"]).permute(0, 3, 1, 2).to(device),
+            "cam_right_wrist": torch.Tensor(obs["cam_right_wrist"]).permute(0, 3, 1, 2).to(device),
+            "state": torch.Tensor(obs["state"]).to(device),
+            "task": [obs["prompt"]],
         }
 
         # convert to bfloat16
@@ -620,7 +644,7 @@ class SACPiAgent(nn.Module):
             actions = self.actor.model.sample_actions(
                 images, img_masks, lang_tokens, lang_masks, state, noise=None, deterministic=deterministic
             )
-        actions = actions[0, :, :self.action_dim]    # For dobot, we use :14
+        actions = actions[0, :, : self.action_dim]  # For dobot, we use :14
         return actions
 
     @classmethod
@@ -664,8 +688,8 @@ class SACPiAgent(nn.Module):
         pi0_config.scheduler_warmup_steps = lr_scheduler_kwargs["num_warmup_steps"]
         pi0_config.scheduler_decay_steps = lr_scheduler_kwargs["num_decay_steps"]
         actor = PI0Policy.from_pretrained(
-            openpi_checkpoint_dir, 
-            config=pi0_config, 
+            openpi_checkpoint_dir,
+            config=pi0_config,
             local_files_only=True,
         )
         # actor.config.num_steps = 1  # for debugging
@@ -673,12 +697,18 @@ class SACPiAgent(nn.Module):
         del actor.model.paligemma_with_expert.gemma_expert.lm_head
         # actor.model.paligemma_with_expert.paligemma.language_model.model.embed_tokens.requires_grad_(False)
         actor.model.paligemma_with_expert.paligemma.language_model.model.norm.requires_grad_(False)
-        actor.model.paligemma_with_expert.paligemma.language_model.model.layers[17].post_attention_layernorm.requires_grad_(False)
+        actor.model.paligemma_with_expert.paligemma.language_model.model.layers[
+            17
+        ].post_attention_layernorm.requires_grad_(False)
         actor.model.paligemma_with_expert.paligemma.language_model.model.layers[17].mlp.down_proj.requires_grad_(False)
         actor.model.paligemma_with_expert.paligemma.language_model.model.layers[17].mlp.up_proj.requires_grad_(False)
         actor.model.paligemma_with_expert.paligemma.language_model.model.layers[17].mlp.gate_proj.requires_grad_(False)
-        actor.model.paligemma_with_expert.paligemma.language_model.model.layers[17].self_attn.o_proj.requires_grad_(False)
-        actor.model.paligemma_with_expert.paligemma.language_model.model.layers[17].self_attn.q_proj.requires_grad_(False)
+        actor.model.paligemma_with_expert.paligemma.language_model.model.layers[17].self_attn.o_proj.requires_grad_(
+            False
+        )
+        actor.model.paligemma_with_expert.paligemma.language_model.model.layers[17].self_attn.q_proj.requires_grad_(
+            False
+        )
         gc.collect()
 
         for module in actor.model.modules():
@@ -690,9 +720,8 @@ class SACPiAgent(nn.Module):
 
         # Create encoders for critic
         if encoder_type == "resnet-pretrained":
-            from serl_launcher.vision.resnet_v1 import (
-                resnetv1_configs,
-            )
+            from serl_launcher.vision.resnet_v1 import resnetv1_configs  # noqa
+
             # Create separate encoder instances for each image key
             encoders = {}
             for image_key in critic_keys:
@@ -710,14 +739,14 @@ class SACPiAgent(nn.Module):
             enable_stacking=True,
             image_keys=critic_keys,
         )
-        
+
         # Create critic network
         critic_backbone = ensemblize(
-            partial(MLP, **critic_network_kwargs), 
-            # partial(Transformer, **critic_network_kwargs), 
-            critic_ensemble_size
+            partial(MLP, **critic_network_kwargs),
+            # partial(Transformer, **critic_network_kwargs),
+            critic_ensemble_size,
         )()
-        
+
         critic = Critic(
             encoder=encoder,
             network=critic_backbone,
@@ -735,22 +764,22 @@ class SACPiAgent(nn.Module):
             {
                 "params": filter(lambda p: p.requires_grad, actor.parameters()),
                 **optimizer_kwargs["actor"],
-            }, 
+            },
             {
                 "params": filter(lambda p: p.requires_grad, critic.parameters()),
                 **optimizer_kwargs["critic"],
-            }, 
+            },
             {
                 "params": filter(lambda p: p.requires_grad, temperature.parameters()),
                 **optimizer_kwargs["temperature"],
-            }
+            },
         ]
         unified_optimizer = optim.AdamW(all_params)
         # unified_optimizer = optim.Adam(all_params)
 
-        lr_scheduler = CosineDecayWithWarmupSchedulerConfig( 
+        lr_scheduler = CosineDecayWithWarmupSchedulerConfig(
             **lr_scheduler_kwargs,
-        ).build(unified_optimizer, num_training_steps=0)    # HACK: num_training_steps is not used
+        ).build(unified_optimizer, num_training_steps=0)  # HACK: num_training_steps is not used
         # lr_scheduler = optim.lr_scheduler.CyclicLR(
         #     unified_optimizer,
         #     base_lr=lr_scheduler_kwargs["decay_lr"],
@@ -788,6 +817,5 @@ class SACPiAgent(nn.Module):
             temperature=temperature,
             device=device,
         )
-        
-        return agent, unified_optimizer, lr_scheduler
 
+        return agent, unified_optimizer, lr_scheduler

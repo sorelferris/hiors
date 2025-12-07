@@ -57,7 +57,7 @@ import sys
 # ruff: noqa: E402
 BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))  # noqa
 sys.path.insert(0, BASE_DIR)
- 
+
 from collections import deque
 import math
 
